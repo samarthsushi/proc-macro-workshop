@@ -2,9 +2,9 @@ use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
 use quote::quote;
 
-fn unwrap_option_t(ty: &syn::Type) -> Option<&syn::Type> {
+fn unwrap_wrapper_t<'a>(wrapper_t: &'a str, ty: &'a syn::Type) -> Option<&'a syn::Type> {
     if let syn::Type::Path(ref p) = ty {
-        if p.path.segments.len() != 1 || p.path.segments[0].ident != "Option" {
+        if p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper_t {
             return None;
         }
         if let syn::PathArguments::AngleBracketed(ref inner_ty) = p.path.segments[0].arguments {
@@ -38,7 +38,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let fields_after_option_types = fields.iter().map(|f| {
         let field_name = &f.ident;
         let ty = &f.ty;
-        if unwrap_option_t(ty).is_some() {
+        if unwrap_wrapper_t("Option", ty).is_some() {
             return quote! { #field_name: #ty };
         }
         quote! { #field_name: std::option::Option<#ty> }
@@ -46,7 +46,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let setter_methods = fields.iter().map(|f| {
         let field_name = &f.ident;
         let ty = &f.ty;
-        if let Some(inner_ty) = unwrap_option_t(ty) {
+        if let Some(inner_ty) = unwrap_wrapper_t("Option",ty) {
             quote! {
                 fn #field_name(&mut self, #field_name: #inner_ty) -> &mut Self {
                     self.#field_name = Some(#field_name);
@@ -62,17 +62,42 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         }
     });
-    let extend_methods = fields.iter().map(|f| {
-        if !f.attrs.is_empty() {
-            eprint!("{:#?}", f.attrs);
+    let extend_methods = fields.iter().filter_map(|f| {
+        let field_name = &f.ident;
+        for attr in &f.attrs {
+            if attr.path().is_ident("builder") {
+                let mut expanded = None;
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("each") {
+                        let lit: syn::LitStr = meta.value().unwrap().parse().unwrap();
+                        let extend_fn_name = syn::Ident::new(&lit.value(), lit.span());
+                        let inner_ty = unwrap_wrapper_t("Vec", &f.ty).unwrap();
+
+                        expanded = Some(quote! {
+                            fn #extend_fn_name(&mut self, #extend_fn_name: #inner_ty) -> &mut Self {
+                                if let Some(ref mut values) = self.#field_name {
+                                    values.push(#extend_fn_name);
+                                } else {
+                                    self.#field_name = Some(vec![#extend_fn_name]);
+                                }
+                                self
+                            }
+                        });
+                        Ok(())
+                    } else {
+                        return Err(meta.error("expected 'each'"));
+                    }
+                });
+                return expanded;
+            }
+
         }
-        quote! {}
-        
+        None    
     });
     let build_method = fields.iter().map(|f| {
         let field_name = &f.ident;
         let ty = &f.ty;
-        if unwrap_option_t(ty).is_some() {
+        if unwrap_wrapper_t("Option", ty).is_some() {
             let expr = quote! {
                 #field_name: self.#field_name.clone()
             };
