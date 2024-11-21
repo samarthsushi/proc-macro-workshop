@@ -20,7 +20,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let fields_after_option_types = fields.iter().map(|f| {
         let field_name = &f.ident;
         let ty = &f.ty;
+<<<<<<< HEAD
         if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f) {
+=======
+        if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f).unwrap().is_some() {
+>>>>>>> a09bb46030ca8f4dd8b6d47657fc876193ff5ce6
             return quote! { #field_name: #ty };
         }
         quote! { #field_name: std::option::Option<#ty> }
@@ -35,7 +39,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     self
                 }
             }
+<<<<<<< HEAD
         } else if builder_of(&f) {
+=======
+        } else if builder_of(&f).unwrap().is_some() {
+>>>>>>> a09bb46030ca8f4dd8b6d47657fc876193ff5ce6
             quote! {
                 fn #field_name(&mut self, #field_name: #ty) -> &mut Self {
                     self.#field_name = #field_name;
@@ -64,7 +72,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let build_method = fields.iter().map(|f| {
         let field_name = &f.ident;
         let ty = &f.ty;
+<<<<<<< HEAD
         if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f) {
+=======
+        if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f).unwrap().is_some() {
+>>>>>>> a09bb46030ca8f4dd8b6d47657fc876193ff5ce6
             let expr = quote! {
                 #field_name: self.#field_name.clone()
             };
@@ -76,8 +88,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
     });
     let build_empty = fields.iter().map(|f| {
         let field_name = &f.ident;
+<<<<<<< HEAD
         if builder_of(&f) {
             quote! { #field_name: std::vec::Vec::new() }
+=======
+        if builder_of(&f).unwrap().is_some() {
+            quote! { #field_name: Vec::new() }
+>>>>>>> a09bb46030ca8f4dd8b6d47657fc876193ff5ce6
         } else {
             quote! { #field_name: std::option::Option::None }
         }
@@ -124,6 +141,7 @@ fn unwrap_wrapper_t<'a>(wrapper_t: &'a str, ty: &'a syn::Type) -> Option<&'a syn
     None
 }
 
+<<<<<<< HEAD
 fn builder_of(f: &syn::Field) -> bool {
     for attr in &f.attrs {
         if attr.path().is_ident("builder") {
@@ -142,10 +160,18 @@ fn extended_methods(f: &syn::Field) -> Option<(bool, proc_macro2::TokenStream)> 
             let mut lit = None;
 
             let result = attr.parse_nested_meta(|meta| {
+=======
+fn builder_of(f: &syn::Field) -> Result<Option<syn::LitStr>, syn::Error> {
+    for attr in &f.attrs {
+        if attr.path().is_ident("builder") {
+            let mut lit = None;
+            attr.parse_nested_meta(|meta| {
+>>>>>>> a09bb46030ca8f4dd8b6d47657fc876193ff5ce6
                 if meta.path.is_ident("each") {
                     lit = Some(meta.value()?.parse::<syn::LitStr>()?);
                     Ok(())
                 } else {
+<<<<<<< HEAD
                     Err(meta.error("expected `builder(each = \"...\")`"))
                 }
             });
@@ -182,3 +208,37 @@ fn extended_methods(f: &syn::Field) -> Option<(bool, proc_macro2::TokenStream)> 
 
     None
 }
+=======
+                    return Err(meta.error(r#"expected `builder(each = "...")`"#));
+                }
+            }).map_err(|e| syn::Error::new_spanned(attr, e))?;
+            return Ok(lit);
+        }
+    }
+    Ok(None)
+}
+
+fn extended_methods (f: &syn::Field) -> Option<(bool, proc_macro2::TokenStream)> {
+    let field_name = &f.ident;
+    let mut avoid_conflict = false;
+    match builder_of(f) {
+        Ok(Some(lit)) => {
+            let extend_fn_name = syn::Ident::new(&lit.value(), lit.span());
+            let inner_ty = unwrap_wrapper_t("Vec", &f.ty).unwrap();
+
+            if field_name.as_ref().unwrap() == &extend_fn_name { avoid_conflict = true };
+
+            let expanded = quote! {
+                fn #extend_fn_name(&mut self, #extend_fn_name: #inner_ty) -> &mut Self {
+                    self.#field_name.push(#extend_fn_name);
+                    self
+                }
+            };
+        
+            return Some((avoid_conflict, expanded));
+        }
+        Err(e) => Some((false, e.to_compile_error())),
+        Ok(None) => None,
+    }
+}
+>>>>>>> a09bb46030ca8f4dd8b6d47657fc876193ff5ce6
