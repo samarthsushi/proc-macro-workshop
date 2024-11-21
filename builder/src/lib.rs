@@ -20,7 +20,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let fields_after_option_types = fields.iter().map(|f| {
         let field_name = &f.ident;
         let ty = &f.ty;
-        if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f).is_some() {
+        if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f) {
             return quote! { #field_name: #ty };
         }
         quote! { #field_name: std::option::Option<#ty> }
@@ -31,11 +31,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let setter_method = if let Some(inner_ty) = unwrap_wrapper_t("Option",ty) {
             quote! {
                 fn #field_name(&mut self, #field_name: #inner_ty) -> &mut Self {
-                    self.#field_name = Some(#field_name);
+                    self.#field_name = std::option::Option::Some(#field_name);
                     self
                 }
             }
-        } else if builder_of(&f).is_some() {
+        } else if builder_of(&f) {
             quote! {
                 fn #field_name(&mut self, #field_name: #ty) -> &mut Self {
                     self.#field_name = #field_name;
@@ -45,7 +45,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         } else {
             quote! {
                 fn #field_name(&mut self, #field_name: #ty) -> &mut Self {
-                    self.#field_name = Some(#field_name);
+                    self.#field_name = std::option::Option::Some(#field_name);
                     self
                 }
             }
@@ -64,7 +64,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let build_method = fields.iter().map(|f| {
         let field_name = &f.ident;
         let ty = &f.ty;
-        if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f).is_some() {
+        if unwrap_wrapper_t("Option", ty).is_some() || builder_of(&f) {
             let expr = quote! {
                 #field_name: self.#field_name.clone()
             };
@@ -76,10 +76,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
     });
     let build_empty = fields.iter().map(|f| {
         let field_name = &f.ident;
-        if builder_of(&f).is_some() {
-            quote! { #field_name: Vec::new() }
+        if builder_of(&f) {
+            quote! { #field_name: std::vec::Vec::new() }
         } else {
-            quote! { #field_name: None }
+            quote! { #field_name: std::option::Option::None }
         }
     });
     let expanded = quote! {
@@ -89,8 +89,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #builder_ident {
             #(#methods)*
 
-            fn build(&self) -> Result<#name, Box<dyn std::error::Error>> {
-                Ok (#name {
+            fn build(&self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
+                std::result::Result::Ok (#name {
                     #(#build_method,)*
                 })
             }
@@ -124,42 +124,61 @@ fn unwrap_wrapper_t<'a>(wrapper_t: &'a str, ty: &'a syn::Type) -> Option<&'a syn
     None
 }
 
-fn builder_of(f: &syn::Field) -> Option<syn::LitStr> {
+fn builder_of(f: &syn::Field) -> bool {
+    for attr in &f.attrs {
+        if attr.path().is_ident("builder") {
+            return true;
+        }
+    }
+    false 
+}
+
+fn extended_methods(f: &syn::Field) -> Option<(bool, proc_macro2::TokenStream)> {
+    let field_name = &f.ident;
+    let mut avoid_conflict = false;
+
     for attr in &f.attrs {
         if attr.path().is_ident("builder") {
             let mut lit = None;
-            let _ = attr.parse_nested_meta(|meta| {
+
+            let result = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("each") {
                     lit = Some(meta.value()?.parse::<syn::LitStr>()?);
                     Ok(())
                 } else {
-                    Err(meta.error("expected 'each'"))
+                    Err(meta.error("expected `builder(each = \"...\")`"))
                 }
             });
-            return lit;
+
+            if let Err(err) = result {
+                return Some((false, err.to_compile_error()));
+            }
+
+            if let Some(lit) = lit {
+                let extend_fn_name = syn::Ident::new(&lit.value(), lit.span());
+
+                if field_name.as_ref() == Some(&extend_fn_name) {
+                    avoid_conflict = true;
+                }
+
+                let inner_ty = unwrap_wrapper_t("Vec", &f.ty).unwrap_or_else(|| {
+                    panic!(
+                        "Field with `builder(each = ...)` must be of type `Vec`. Field: {:?}",
+                        field_name
+                    );
+                });
+
+                let expanded = quote! {
+                    fn #extend_fn_name(&mut self, #extend_fn_name: #inner_ty) -> &mut Self {
+                        self.#field_name.push(#extend_fn_name);
+                        self
+                    }
+                };
+
+                return Some((avoid_conflict, expanded));
+            }
         }
     }
-    None
-}
 
-fn extended_methods (f: &syn::Field) -> Option<(bool, proc_macro2::TokenStream)> {
-    let field_name = &f.ident;
-    let mut avoid_conflict = false;
-    let mut _expanded = None;
-    if let Some(lit) = builder_of(f) {
-        let extend_fn_name = syn::Ident::new(&lit.value(), lit.span());
-        let inner_ty = unwrap_wrapper_t("Vec", &f.ty).unwrap();
-
-        if field_name.as_ref().unwrap() == &extend_fn_name { avoid_conflict = true };
-
-        _expanded = Some(quote! {
-            fn #extend_fn_name(&mut self, #extend_fn_name: #inner_ty) -> &mut Self {
-                self.#field_name.push(#extend_fn_name);
-                self
-            }
-        });
-    
-        return Some((avoid_conflict, _expanded.unwrap().into()));
-    }
     None
 }
